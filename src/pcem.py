@@ -421,15 +421,16 @@ class ComponentGMM:
             # Update mixing coefficient
             self.mixing_coeffs[i] = resp_i.mean()
     
-    def sample(self, n_samples: int) -> torch.Tensor:
+    def sample(self, n_samples: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generate random samples from the mixture model.
-        
+        Generate random samples from the mixture model while keeping track of true component labels.
+
         Args:
             n_samples: Number of samples to generate
-            
+
         Returns:
-            Samples of shape [n_samples, n_dimensions]
+            samples: Tensor of shape [n_samples, n_dimensions] containing generated samples.
+            labels: Tensor of shape [n_samples] with true component labels.
         """
         # Determine how many samples to generate from each component
         component_samples = torch.multinomial(
@@ -437,24 +438,27 @@ class ComponentGMM:
             n_samples, 
             replacement=True
         ).bincount(minlength=self.n_components)
-        
+
         samples_list = []
-        
-        # Generate samples from each component
+        labels_list = []
+
+        # Generate samples from each component and record labels
         for i, n in enumerate(component_samples):
             if n > 0:
-                component_samples = self.components[i].sample(int(n))
-                samples_list.append(component_samples)
-        
-        # Combine all samples
+                component_samples_i = self.components[i].sample(int(n))
+                samples_list.append(component_samples_i)
+                labels_list.append(torch.full((int(n),), i, dtype=torch.long, device=self.device))  
+
+        # Combine all samples and labels
         if samples_list:
             samples = torch.cat(samples_list, dim=0)
-            
-            # Shuffle the samples
-            perm = torch.randperm(samples.shape[0])
-            return samples[perm]
+            labels = torch.cat(labels_list, dim=0)  # Fully torch-based
+
+            # Shuffle the samples and labels together
+            perm = torch.randperm(samples.shape[0], device=self.device)
+            return samples[perm], labels[perm]
         else:
-            return torch.zeros((0, self.n_dimensions), device=self.device)
+            return torch.zeros((0, self.n_dimensions), device=self.device), torch.zeros((0,), dtype=torch.long, device=self.device)
     
     def calculate_log_likelihood(self, x: torch.Tensor) -> torch.Tensor:
         """

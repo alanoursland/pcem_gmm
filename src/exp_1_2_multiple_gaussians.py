@@ -7,6 +7,7 @@ import torch.nn as nn
 from matplotlib.patches import Ellipse
 from pcem import ComponentGaussian, ComponentGMM
 from scipy.linalg import eigh
+from sklearn.cluster import KMeans
 
 def create_groundtruth():
     # Create a ground truth GMM with 2 components in 2D
@@ -30,7 +31,7 @@ if __name__ == "__main__":
 
     # Create a ground truth GMM and get samples
     groundtruth = create_groundtruth()
-    samples = groundtruth.sample(1000)
+    samples, labels = groundtruth.sample(1000)
 
     print("\n[Experiment] Running PCEM-GMM on synthetic 2D Gaussian mixture data...\n")
 
@@ -38,10 +39,16 @@ if __name__ == "__main__":
     model = ComponentGMM(
         n_components=2, 
         n_dimensions=2, 
-        max_iterations=20, 
-        tolerance=1e-4, 
+        max_iterations=50, 
+        tolerance=1e-6, 
         device=device
     )
+
+    # K-means initialization for means
+    kmeans = KMeans(n_clusters=2, random_state=42).fit(samples.cpu().numpy())
+    initial_means = torch.tensor(kmeans.cluster_centers_, device=device)
+    model.components[0].set_mean(initial_means[0])
+    model.components[1].set_mean(initial_means[1])
 
     # Fit the model to the data
     model.fit(samples)

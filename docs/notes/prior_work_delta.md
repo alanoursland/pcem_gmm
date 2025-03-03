@@ -88,7 +88,7 @@ Roweis proposed **EM for PCA**, which extracts eigenvectors iteratively using an
 ---
 
 ## **Summary: Where PCEM-GMM Stands**
-| **Method** | **Uses PCA Iteratively?** | **Avoids Explicit Covariance Matrices?** | **Learns Principal Components Dynamically?** | **Clusters and Reduces Dimensionality?** |
+| **Method** | **Uses PCA Iteratively?** | **Avoids Storing Covariance Matrices?** | **Learns Principal Components Dynamically?** | **Clusters and Reduces Dimensionality?** |
 |------------|---------------------------|-------------------------------------------|--------------------------------------------|-------------------------------------------|
 | **PCEM-GMM (Your Approach)** | ✅ Yes | ✅ Yes | ✅ Yes (per component) | ✅ Yes |
 | **PCA-GMM** | ❌ PCA is fixed before EM | ❌ Uses reduced covariance matrices | ❌ Fixed subspace per component | ✅ Yes |

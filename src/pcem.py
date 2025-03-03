@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import Optional, Tuple
 
 class ComponentGaussian(nn.Module):
     def __init__(self, dimensionality=None, component_count=None, mean=None, eigenvectors=None, eigenvalues=None, requires_grad=False, device="cpu"):
@@ -276,4 +277,255 @@ class ComponentGaussian(nn.Module):
         self.set_eigenvalues(torch.tensor(eigenvalues, device=data.device))
         
         return self
+
+class ComponentGMM:
+    """
+    Gaussian Mixture Model implementation using Principal Component EM (PCEM)
+    with ComponentGaussian objects.
+    """
+    
+    def __init__(self, n_components: int, n_dimensions: int, 
+                 max_iterations: int = 100, 
+                 tolerance: float = 1e-4,
+                 random_state: Optional[int] = None,
+                 device: Optional[torch.device] = None):
+        """
+        Initialize the ComponentGMM model.
+        
+        Args:
+            n_components: Number of Gaussian components
+            n_dimensions: Dimensionality of the data
+            max_iterations: Maximum number of EM iterations
+            tolerance: Convergence tolerance for log-likelihood
+            random_state: Random seed for reproducibility
+            device: Device to run computations on (CPU/GPU)
+        """
+        self.n_components = n_components
+        self.n_dimensions = n_dimensions
+        self.max_iterations = max_iterations
+        self.tolerance = tolerance
+        
+        # Set random seed if provided
+        if random_state is not None:
+            torch.manual_seed(random_state)
+            
+        # Set device
+        self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Initialize components and mixing coefficients
+        self.components = [ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_components)]
+        self.mixing_coeffs = torch.ones(n_components, device=self.device) / n_components
+        
+        # For convergence tracking
+        self.log_likelihood_history = []
+        self.n_iterations_ = 0
+        self.converged_ = False
+        
+    def fit(self, x: torch.Tensor) -> 'ComponentGMM':
+        """
+        Fit the GMM to the data using the EM algorithm.
+        
+        Args:
+            x: Data tensor of shape [n_samples, n_dimensions]
+            
+        Returns:
+            self: The fitted model
+        """
+        # Initial log likelihood
+        prev_log_likelihood = float('-inf')
+        self.n_iterations_ = 0
+        
+        # EM loop
+        for iteration in range(self.max_iterations):
+            # E-step: compute responsibilities
+            responsibilities, current_log_likelihood = self.e_step(x)
+            
+            # Store log likelihood
+            self.log_likelihood_history.append(current_log_likelihood.item())
+            
+            # Check for convergence
+            if self._check_convergence(current_log_likelihood, prev_log_likelihood):
+                self.converged_ = True
+                break
+                
+            # M-step: update parameters
+            self.m_step(x, responsibilities)
+            
+            # Update previous log likelihood
+            prev_log_likelihood = current_log_likelihood
+            
+            # Update iteration count
+            self.n_iterations_ = iteration + 1
+            
+        return self
+        
+    def e_step(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Perform the E-step: compute responsibilities.
+        
+        Args:
+            x: Data tensor of shape [n_samples, n_dimensions]
+            
+        Returns:
+            responsibilities: Tensor of shape [n_samples, n_components]
+            log_likelihood: Current log-likelihood value
+        """
+        n_samples = x.shape[0]
+        
+        # Calculate likelihoods for each component (will be of shape [n_samples, 1])
+        component_likelihoods = []
+        weighted_likelihoods = []
+        
+        for i, component in enumerate(self.components):
+            # Get likelihoods from component - keep the (n_samples, 1) shape
+            likelihood = component.calculate_density(x)  # or the original method name
+            component_likelihoods.append(likelihood)
+            
+            # Apply mixing coefficient (still keeping the shape)
+            weighted_likelihood = likelihood * self.mixing_coeffs[i]
+            weighted_likelihoods.append(weighted_likelihood)
+        
+        # Stack weighted likelihoods for easier operations
+        all_weighted_likelihoods = torch.cat(weighted_likelihoods, dim=1)
+        
+        # Compute total likelihood per sample (sum across components)
+        total_likelihoods = all_weighted_likelihoods.sum(dim=1, keepdim=True)
+        
+        # Compute responsibilities for all components
+        responsibilities = torch.cat([
+            weighted_likelihood / (total_likelihoods + 1e-6) 
+            for weighted_likelihood in weighted_likelihoods
+        ], dim=1)
+        
+        # Compute log likelihood
+        log_likelihood = torch.log(torch.clamp(total_likelihoods, min=1e-10)).sum()
+        
+        return responsibilities, log_likelihood
+
+    def m_step(self, x: torch.Tensor, responsibilities: torch.Tensor) -> None:
+        """
+        Perform the M-step: update component parameters.
+        
+        Args:
+            x: Data tensor of shape [n_samples, n_dimensions]
+            responsibilities: Tensor of shape [n_samples, n_components]
+        """
+        # Update parameters for each component
+        for i, component in enumerate(self.components):
+            # Get responsibilities for this component
+            resp_i = responsibilities[:, i].unsqueeze(1)
+            
+            # Update component parameters
+            component.fit(x, resp_i)
+            
+            # Update mixing coefficient
+            self.mixing_coeffs[i] = resp_i.mean()
+    
+    def sample(self, n_samples: int) -> torch.Tensor:
+        """
+        Generate random samples from the mixture model.
+        
+        Args:
+            n_samples: Number of samples to generate
+            
+        Returns:
+            Samples of shape [n_samples, n_dimensions]
+        """
+        # Determine how many samples to generate from each component
+        component_samples = torch.multinomial(
+            self.mixing_coeffs, 
+            n_samples, 
+            replacement=True
+        ).bincount(minlength=self.n_components)
+        
+        samples_list = []
+        
+        # Generate samples from each component
+        for i, n in enumerate(component_samples):
+            if n > 0:
+                component_samples = self.components[i].sample(int(n))
+                samples_list.append(component_samples)
+        
+        # Combine all samples
+        if samples_list:
+            samples = torch.cat(samples_list, dim=0)
+            
+            # Shuffle the samples
+            perm = torch.randperm(samples.shape[0])
+            return samples[perm]
+        else:
+            return torch.zeros((0, self.n_dimensions), device=self.device)
+    
+    def calculate_log_likelihood(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Calculate the log-likelihood of the data under the current model.
+        
+        Args:
+            x: Data tensor of shape [n_samples, n_dimensions]
+            
+        Returns:
+            Log-likelihood value
+        """
+        n_samples = x.shape[0]
+        
+        # Calculate likelihoods for each component
+        weighted_likelihoods = torch.zeros((n_samples, self.n_components), device=self.device)
+        
+        for i, component in enumerate(self.components):
+            likelihoods = component.calculate_density(x)
+            weighted_likelihoods[:, i] = likelihoods.squeeze() * self.mixing_coeffs[i]
+        
+        # Sum likelihoods across components
+        total_likelihoods = weighted_likelihoods.sum(dim=1)
+        
+        # Compute log likelihood with stabilization
+        log_likelihood = torch.log(torch.clamp(total_likelihoods, min=1e-10)).sum()
+        
+        return log_likelihood
+    
+    def _check_convergence(self, current_ll: float, previous_ll: float) -> bool:
+        """
+        Check if the algorithm has converged.
+        
+        Args:
+            current_ll: Current log-likelihood
+            previous_ll: Previous log-likelihood
+            
+        Returns:
+            True if converged, False otherwise
+        """
+        if previous_ll == float('-inf'):
+            return False
+        
+        # Calculate absolute and relative change
+        abs_change = current_ll - previous_ll
+        rel_change = abs(abs_change / (previous_ll + 1e-10))
+        
+        # Check if relative change is below tolerance
+        return rel_change < self.tolerance
+    
+    def summary(self) -> None:
+        """
+        Print a summary of the model parameters.
+        """
+        print(f"\n=== ComponentGMM Summary ===")
+        print(f"Number of components: {self.n_components}")
+        print(f"Dimensions: {self.n_dimensions}")
+        print(f"Iterations run: {self.n_iterations_}")
+        print(f"Converged: {self.converged_}")
+        
+        if len(self.log_likelihood_history) > 0:
+            print(f"Final log-likelihood: {self.log_likelihood_history[-1]:.4f}")
+        
+        print("\nMixing coefficients:")
+        for i, coef in enumerate(self.mixing_coeffs):
+            print(f"  Component {i+1}: {coef.item():.4f}")
+        
+        print("\nComponent means:")
+        for i, component in enumerate(self.components):
+            print(f"  Component {i+1}: {component.mean.cpu().numpy()}")
+        
+        print("\nComponent eigenvalues:")
+        for i, component in enumerate(self.components):
+            print(f"  Component {i+1}: {component.eigenvalues.cpu().numpy()}")
 

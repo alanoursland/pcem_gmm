@@ -139,6 +139,40 @@ class ComponentGaussian(nn.Module):
 
         return v, eigenvalue
 
+    def calculate_responsibilities(self, data):
+        """
+        Calculate the unnormalized responsibilities (likelihoods) for each data point
+        belonging to this Gaussian component.
+
+        :param data: Tensor of shape (n_samples, dimensionality)
+        :return: Tensor of shape (n_samples, 1) containing unnormalized responsibilities
+        """
+        d = self.mean.shape[0]
+        device = self.mean.device
+        
+        # Center the data
+        centered_data = data - self.mean
+
+        # Project data onto eigenvector space
+        projected_data = centered_data @ self.eigenvectors
+
+        # Compute Mahalanobis distance squared
+        scaled_distances = (projected_data ** 2) / (self.eigenvalues.unsqueeze(0) + 1e-6)
+        mahalanobis_sq = scaled_distances.sum(dim=1)
+
+        # Compute log determinant of covariance (with stability term)
+        log_det = torch.log(self.eigenvalues + 1e-6).sum()
+
+        # Compute log likelihood
+        log_likelihood = -0.5 * (d * torch.log(2 * torch.tensor(torch.pi, device=device)) 
+                                + log_det 
+                                + mahalanobis_sq)
+
+        # Convert to likelihoods (unnormalized responsibilities)
+        likelihoods = torch.exp(log_likelihood).unsqueeze(1)
+
+        return likelihoods  # Should be normalized externally in GMM
+
     def fit(self, data, responsibilities):
         """
         Modified M-step: Extract principal components iteratively.

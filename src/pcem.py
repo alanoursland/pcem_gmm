@@ -30,7 +30,7 @@ class ComponentGaussian(nn.Module):
             # Generate random parameters
             mean = torch.randn(dimensionality, device=device)
             
-            # Random orthonormal eigenvectors
+            # Random orthonormal eigenvectors in column reprsentation
             random_matrix = torch.randn(dimensionality, dimensionality, device=device)
             eigenvectors_full, _ = torch.linalg.qr(random_matrix)
             eigenvectors = eigenvectors_full[:, :component_count]
@@ -110,36 +110,72 @@ class ComponentGaussian(nn.Module):
         
         return samples
 
-    def _power_iteration(self, S, num_iters=50, tol=1e-6):
+    def _rayleigh_quotient_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
         """
-        Power Iteration to find the dominant eigenvector of matrix S.
+        Rayleigh Quotient Iteration to find the dominant eigenvector and eigenvalue.
         """
         device = self.mean.device
-        v = torch.randn(S.shape[0], device=device)
+        v = torch.randn(scatter_matrix.shape[0], device=device)
         v /= torch.norm(v)
 
-        print("\n[Power Iteration] Starting...")
-        
-        for i in range(num_iters):
-            v_new = S @ v
-            v_new /= torch.norm(v_new)
+        # print("\n[Rayleigh Quotient Iteration] Starting...")
 
+        for i in range(num_iters):
+            v_new = scatter_matrix @ v
+            v_new /= torch.norm(v_new)  # Normalization (same as power iteration)
+
+            eigenvalue = (v_new @ scatter_matrix @ v_new).item()  # Rayleigh Quotient
+            
             diff = torch.norm(v_new - v)
-            print(f"  Iter {i+1}: Change in eigenvector = {diff:.6f}")
+            # print(f"  Iter {i+1}: Eigenvalue = {eigenvalue:.6f}, Change in eigenvector = {diff:.6f}")
 
             if diff < tol:
-                print("  Converged.")
+                # print("  Converged.")
                 break
 
             v = v_new
 
-        eigenvalue = (v @ S @ v).item()
-        print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
-        print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
+        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
+        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
 
         return v, eigenvalue
 
-    def calculate_responsibilities(self, data):
+    def _power_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
+        """
+        Power Iteration to find the dominant eigenvector of matrix scatter_matrix.
+        """
+        device = self.mean.device
+
+        # random start
+        v = torch.randn(scatter_matrix.shape[0], device=device)
+        v /= torch.norm(v)
+
+        # initialize v as the mean direction
+        # v = torch.mean(centered_data, dim=0)
+        # v /= torch.norm(v)
+
+        # print("\n[Power Iteration] Starting...")
+        
+        for i in range(num_iters):
+            v_new = scatter_matrix @ v
+            v_new /= torch.norm(v_new)
+
+            diff = torch.norm(v_new - v)
+            # print(f"  Iter {i+1}: Change in eigenvector = {diff:.6f}")
+
+            if diff < tol:
+                # print("  Converged.")
+                break
+
+            v = v_new
+
+        eigenvalue = (v @ scatter_matrix @ v).item()
+        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
+        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
+
+        return v, eigenvalue
+
+    def calculate_density(self, data):
         """
         Calculate the unnormalized responsibilities (likelihoods) for each data point
         belonging to this Gaussian component.
@@ -183,19 +219,20 @@ class ComponentGaussian(nn.Module):
         :return: self (for method chaining)
         """
         device = self.mean.device
-        print("\n[PCEM M-Step] Computing weighted mean...")
+        # print("\n[PCEM M-Step] Computing weighted mean...")
         
         # Compute weighted mean
         weights = responsibilities.sum(dim=0)
         mu = (responsibilities.T @ data) / weights.unsqueeze(1)
 
-        print(f"  Estimated Mean: {mu.cpu().numpy()}")
+        # print(f"  Estimated Mean: {mu.cpu().numpy()}")
 
         # Center data
         centered_data = data - mu
 
         # Compute the scatter matrix (without explicit covariance computation)
-        S = (centered_data.T @ (responsibilities * centered_data)) / weights
+        # this is a weighted, unnormalized covariance matrix (i.e., not divided by the total number of samples)
+        scatter_matrix = (centered_data.T @ (responsibilities * centered_data)) / weights
 
         # Extract principal components iteratively
         eigenvectors = []
@@ -206,29 +243,36 @@ class ComponentGaussian(nn.Module):
         k = self.eigenvalues.shape[0]
 
         for comp in range(k):  # Extract k components 
-            print(f"\n[PCEM M-Step] Extracting Principal Component {comp+1}...")
+            # print(f"\n[PCEM M-Step] Extracting Principal Component {comp+1}...")
             
-            v, eigenvalue = self._power_iteration(S)
+            v, eigenvalue = self._power_iteration(scatter_matrix)
             eigenvectors.append(v)
             eigenvalues.append(eigenvalue)
-
-            # Deflate the data along the discovered eigenvector
-            projection_matrix = torch.eye(v.shape[0], device=device) - torch.outer(v, v)
-            centered_data = centered_data @ projection_matrix  # Project onto hyperplane
 
             # old method for subtracting variance -- test for speed and stability
             # projection = (centered_data @ v).unsqueeze(1) * v.unsqueeze(0)
             # centered_data -= projection  # Deflate the data
 
-            # Recompute S after deflation
-            S = (centered_data.T @ (responsibilities * centered_data)) / weights
+            # Deflate the data along the discovered eigenvector using projection
+            # projection_matrix = torch.eye(v.shape[0], device=device) - torch.outer(v, v)
+            # centered_data = centered_data @ projection_matrix  # Project onto hyperplane
+            # scatter_matrix = (centered_data.T @ (responsibilities * centered_data)) / weights
 
-            print(f"  Variance removed: {eigenvalue:.6f}")
-            print(f"  Remaining scatter matrix:\n{S.cpu().numpy()}\n")
+            # # Deflate the data along the discovered eigenvector using Gram-Schmidt 
+            # centered_data -= (centered_data @ v.unsqueeze(1)) * v.unsqueeze(0)
+            # scatter_matrix = (centered_data.T @ (responsibilities * centered_data)) / weights
+
+            # Subtract the discovered component from the scatter_matrix
+            scatter_matrix -= eigenvalue * torch.outer(v, v)
+
+            # print(eigenvectors)
+            # print(f"  Variance removed: {eigenvalue:.6f}")
+            # print(f"  Remaining scatter matrix:\n{scatter_matrix.cpu().numpy()}\n")
 
         # Update the model parameters
         self.set_mean(mu.squeeze(0))
-        self.set_eigenvectors(torch.stack(eigenvectors, dim=1))
+        stacked_eigenvectors = torch.stack(eigenvectors, dim=1) # column storage
+        self.set_eigenvectors(stacked_eigenvectors)
         self.set_eigenvalues(torch.tensor(eigenvalues, device=data.device))
         
         return self

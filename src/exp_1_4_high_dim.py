@@ -22,6 +22,20 @@ def random_rotation_matrix(dim):
     q, _ = np.linalg.qr(mat)  # QR decomposition gives orthonormal matrix
     return torch.tensor(q, dtype=torch.float32)
 
+def print_model_parameters(name, means, covariances):
+    """
+    Print the parameters (means, eigenvalues, eigenvectors) of the GMM model.
+    :param name: The name of the model (e.g., "Groundtruth", "PCEM-GMM", etc.)
+    :param means: List or array of means for each component
+    :param covariances: List or array of covariance matrices (or their eigenvalues/eigenvectors) for each component
+    """
+    print(f"\n{name} Parameters:")
+    for i, (mean, cov) in enumerate(zip(means, covariances)):
+        print(f"Component {i+1}:")
+        print(f"  Mean: {mean}")
+        print(f"  Eigenvalues: {np.linalg.eigvalsh(cov)}")  # Compute eigenvalues of the covariance matrix
+        print(f"  Eigenvectors:\n{np.linalg.eigh(cov)[1]}")  # Eigenvectors of the covariance matrix
+
 def create_groudtruth(num_gaussians, num_samples, dim):
     """Generate a synthetic dataset with multiple Gaussians using principal components."""
     means = [np.random.uniform(-5, 5, dim) for _ in range(num_gaussians)]
@@ -29,21 +43,21 @@ def create_groudtruth(num_gaussians, num_samples, dim):
     eigenvectors = [random_rotation_matrix(dim) for _ in range(num_gaussians)]
     
     # Set up ComponentGMM
-    model = ComponentGMM(n_components=num_gaussians, n_dimensions=dim, device=torch.device("cpu"))
+    model = ComponentGMM(n_gaussians=num_gaussians, n_dimensions=dim, device=torch.device("cpu"))
     
     for i in range(num_gaussians):
-        component = model.components[i]
-        component.set_mean(torch.tensor(means[i], dtype=torch.float32))
-        component.set_eigenvectors(eigenvectors[i].clone().detach().to(torch.float32))
-        component.set_eigenvalues(torch.tensor(eigenvalues[i], dtype=torch.float32))
+        gaussian = model.gaussians[i]
+        gaussian.set_mean(torch.tensor(means[i], dtype=torch.float32))
+        gaussian.set_eigenvectors(eigenvectors[i].clone().detach().to(torch.float32))
+        gaussian.set_eigenvalues(torch.tensor(eigenvalues[i], dtype=torch.float32))
 
-    # Adding background noise (1 large, low amplitude Gaussian)
-    noise_component = ComponentGaussian(dim, device=torch.device("cpu"))
-    noise_component.set_mean(torch.zeros(dim, dtype=torch.float32))
-    noise_component.set_eigenvectors(torch.eye(dim, dtype=torch.float32))  # Identity matrix, no rotation
-    noise_component.set_eigenvalues(torch.full((dim,), 0.01, dtype=torch.float32))  # Low amplitude
+    # # Adding background noise (1 large, low amplitude Gaussian)
+    # noise_component = ComponentGaussian(dim, device=torch.device("cpu"))
+    # noise_component.set_mean(torch.zeros(dim, dtype=torch.float32))
+    # noise_component.set_eigenvectors(torch.eye(dim, dtype=torch.float32))  # Identity matrix, no rotation
+    # noise_component.set_eigenvalues(torch.full((dim,), 0.01, dtype=torch.float32))  # Low amplitude
     
-    model.components.append(noise_component)  # Add the noise component to the model
+    # model.gaussians.append(noise_component)  # Add the noise gaussian to the model
     model.use_grad(False)
     return model
 
@@ -92,20 +106,20 @@ for dim in dimensions_list:
     # print(f"PCEM-GMM Converged in {pcem_model.n_iterations_} iterations")
 
     # ====== Groundtruth: CEM-GMM ======
-    # print(" ========================= Groundtruth: CEM-GMM ========================= ")
-    # responsibilities, _ = groundtruth.e_step(x)
-    # component_assignments = torch.argmax(responsibilities, dim=1).cpu().numpy()
-    # conf_matrix, accuracy = compute_clustering_metrics(y, component_assignments)
-    # print("Groundtruth Confusion Matrix:\n", conf_matrix)
-    # print("Groundtruth Clustering Accuracy:", accuracy)
+    print(" ========================= Groundtruth: CEM-GMM ========================= ")
+    responsibilities, _ = groundtruth.e_step(x)
+    component_assignments = torch.argmax(responsibilities, dim=1).cpu().numpy()
+    conf_matrix, accuracy = compute_clustering_metrics(y.cpu(), component_assignments)
+    print("Groundtruth Confusion Matrix:\n", conf_matrix)
+    print("Groundtruth Clustering Accuracy:", accuracy)
 
-    # # Extract ground truth parameters
-    # ground_means = np.array([c.mean.cpu().numpy() for c in groundtruth.components])
-    # ground_covariances = [
-    #     c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
-    #     for c in groundtruth.components
-    # ]    
-    # print_model_parameters("Ground Truth GMM", ground_means, ground_covariances)
+    # Extract ground truth parameters
+    ground_means = np.array([c.mean.cpu().numpy() for c in groundtruth.gaussians])
+    ground_covariances = [
+        c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
+        for c in groundtruth.gaussians
+    ]    
+    print_model_parameters("Ground Truth GMM", ground_means, ground_covariances)
 
     # # ====== Experiment: CEM-GMM ======
     # print(" ========================= Experiment: CEM-GMM ========================= ")
@@ -116,15 +130,15 @@ for dim in dimensions_list:
     # print("PCEM-GMM Clustering Accuracy:", accuracy)
 
     # # Compare means, eigenvalues, and eigenvectors using metrics
-    # for i, component in enumerate(groundtruth.components):
+    # for i, gaussian in enumerate(groundtruth.gaussians):
     #     print(f"\nComparing Component {i+1}:")
-    #     mean_diff = compare_means(component.mean.cpu().numpy(), groundtruth.components[i].mean.cpu().numpy())
+    #     mean_diff = compare_means(gaussian.mean.cpu().numpy(), groundtruth.gaussians[i].mean.cpu().numpy())
     #     print(f"Mean Difference (Component {i+1}): {mean_diff}")
 
-    #     eigenvalue_diff = compare_eigenvalues(component.eigenvalues.cpu().numpy(), groundtruth.components[i].eigenvalues.cpu().numpy())
+    #     eigenvalue_diff = compare_eigenvalues(gaussian.eigenvalues.cpu().numpy(), groundtruth.gaussians[i].eigenvalues.cpu().numpy())
     #     print(f"Eigenvalue Difference (Component {i+1}): {eigenvalue_diff}")
 
-    #     eigenvector_diff = compare_eigenvectors(component.eigenvectors.T.cpu().numpy(), groundtruth.components[i].eigenvectors.T.cpu().numpy())
+    #     eigenvector_diff = compare_eigenvectors(gaussian.eigenvectors.T.cpu().numpy(), groundtruth.gaussians[i].eigenvectors.T.cpu().numpy())
     #     print(f"Eigenvector Difference (Component {i+1}): {eigenvector_diff}")
 
     # # Clustering metrics: ARI and Silhouette Score for Standard GMM

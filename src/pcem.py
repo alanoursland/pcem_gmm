@@ -284,7 +284,7 @@ class ComponentGMM(nn.Module):
     with ComponentGaussian objects.
     """
     
-    def __init__(self, n_components: int, n_dimensions: int, 
+    def __init__(self, n_gaussians: int, n_dimensions: int, 
                  max_iterations: int = 100, 
                  tolerance: float = 1e-4,
                  random_state: Optional[int] = None,
@@ -294,7 +294,7 @@ class ComponentGMM(nn.Module):
         Initialize the ComponentGMM model.
         
         Args:
-            n_components: Number of Gaussian components
+            n_gaussians: Number of Gaussian components
             n_dimensions: Dimensionality of the data
             max_iterations: Maximum number of EM iterations
             tolerance: Convergence tolerance for log-likelihood
@@ -303,7 +303,7 @@ class ComponentGMM(nn.Module):
         """
         super(ComponentGMM, self).__init__()
 
-        self.n_components = n_components
+        self.n_gaussians = n_gaussians
         self.n_dimensions = n_dimensions
         self.max_iterations = max_iterations
         self.tolerance = tolerance
@@ -316,8 +316,10 @@ class ComponentGMM(nn.Module):
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize components and mixing coefficients
-        self.components = nn.ModuleList([ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_components)])
-        self.mixing_coeffs = nn.Parameter(torch.ones(n_components, device=self.device) / n_components)
+        self.gaussians = nn.ModuleList([ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_gaussians)])
+        print(f"self.gaussians {len(self.gaussians)}")
+        self.mixing_coeffs = nn.Parameter(torch.ones(n_gaussians, device=self.device) / n_gaussians)
+        # print(f"self.mixing_coeffs {self.mixing_coeffs.size()}")
         
         # For convergence tracking
         self.log_likelihood_history = []
@@ -396,7 +398,7 @@ class ComponentGMM(nn.Module):
             x: Data tensor of shape [n_samples, n_dimensions]
             
         Returns:
-            responsibilities: Tensor of shape [n_samples, n_components]
+            responsibilities: Tensor of shape [n_samples, n_gaussians]
             log_likelihood: Current log-likelihood value
         """
         n_samples = x.shape[0]
@@ -405,9 +407,9 @@ class ComponentGMM(nn.Module):
         component_likelihoods = []
         weighted_likelihoods = []
         
-        for i, component in enumerate(self.components):
-            # Get likelihoods from component - keep the (n_samples, 1) shape
-            likelihood = component.calculate_density(x)  # or the original method name
+        for i, gaussian in enumerate(self.gaussians):
+            # Get likelihoods from gaussian - keep the (n_samples, 1) shape
+            likelihood = gaussian.calculate_density(x)  # or the original method name
             component_likelihoods.append(likelihood)
             
             # Apply mixing coefficient (still keeping the shape)
@@ -433,48 +435,48 @@ class ComponentGMM(nn.Module):
 
     def m_step(self, x: torch.Tensor, responsibilities: torch.Tensor) -> None:
         """
-        Perform the M-step: update component parameters.
+        Perform the M-step: update gaussian parameters.
         
         Args:
             x: Data tensor of shape [n_samples, n_dimensions]
-            responsibilities: Tensor of shape [n_samples, n_components]
+            responsibilities: Tensor of shape [n_samples, n_gaussians]
         """
-        # Update parameters for each component
-        for i, component in enumerate(self.components):
-            # Get responsibilities for this component
+        # Update parameters for each gaussian
+        for i, gaussian in enumerate(self.gaussians):
+            # Get responsibilities for this gaussian
             resp_i = responsibilities[:, i].unsqueeze(1)
             
-            # Update component parameters
-            component.fit(x, resp_i)
+            # Update gaussian parameters
+            gaussian.fit(x, resp_i)
             
             # Update mixing coefficient
             self.mixing_coeffs[i] = resp_i.mean()
     
     def sample(self, n_samples: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generate random samples from the mixture model while keeping track of true component labels.
+        Generate random samples from the mixture model while keeping track of true gaussian labels.
 
         Args:
             n_samples: Number of samples to generate
 
         Returns:
             samples: Tensor of shape [n_samples, n_dimensions] containing generated samples.
-            labels: Tensor of shape [n_samples] with true component labels.
+            labels: Tensor of shape [n_samples] with true gaussian labels.
         """
-        # Determine how many samples to generate from each component
+        # Determine how many samples to generate from each gaussian
         component_samples = torch.multinomial(
             self.mixing_coeffs, 
             n_samples, 
             replacement=True
-        ).bincount(minlength=self.n_components)
+        ).bincount(minlength=self.n_gaussians)
 
         samples_list = []
         labels_list = []
 
-        # Generate samples from each component and record labels
+        # Generate samples from each gaussian and record labels
         for i, n in enumerate(component_samples):
             if n > 0:
-                component_samples_i = self.components[i].sample(int(n))
+                component_samples_i = self.gaussians[i].sample(int(n))
                 samples_list.append(component_samples_i)
                 labels_list.append(torch.full((int(n),), i, dtype=torch.long, device=self.device))  
 
@@ -515,11 +517,11 @@ class ComponentGMM(nn.Module):
         """
         n_samples = x.shape[0]
         
-        # Calculate likelihoods for each component
-        weighted_likelihoods = torch.zeros((n_samples, self.n_components), device=self.device)
+        # Calculate likelihoods for each gaussian
+        weighted_likelihoods = torch.zeros((n_samples, self.n_gaussians), device=self.device)
         
-        for i, component in enumerate(self.components):
-            likelihoods = component.calculate_density(x)
+        for i, gaussian in enumerate(self.gaussians):
+            likelihoods = gaussian.calculate_density(x)
             weighted_likelihoods[:, i] = likelihoods.squeeze() * self.mixing_coeffs[i]
         
         # Sum likelihoods across components
@@ -556,7 +558,7 @@ class ComponentGMM(nn.Module):
         Print a summary of the model parameters.
         """
         print(f"\n=== ComponentGMM Summary ===")
-        print(f"Number of components: {self.n_components}")
+        print(f"Number of components: {self.n_gaussians}")
         print(f"Dimensions: {self.n_dimensions}")
         print(f"Iterations run: {self.n_iterations_}")
         print(f"Converged: {self.converged_}")
@@ -568,11 +570,11 @@ class ComponentGMM(nn.Module):
         for i, coef in enumerate(self.mixing_coeffs):
             print(f"  Component {i+1}: {coef.item():.4f}")
         
-        print("\nComponent means:")
-        for i, component in enumerate(self.components):
-            print(f"  Component {i+1}: {component.mean.cpu().numpy()}")
+        print("\Gaussian means:")
+        for i, gaussian in enumerate(self.gaussians):
+            print(f"  Gaussian {i+1}: {gaussian.mean.cpu().numpy()}")
         
-        print("\nComponent eigenvalues:")
-        for i, component in enumerate(self.components):
-            print(f"  Component {i+1}: {component.eigenvalues.cpu().numpy()}")
+        print("\Gaussian eigenvalues:")
+        for i, gaussian in enumerate(self.gaussians):
+            print(f"  Gaussian {i+1}: {gaussian.eigenvalues.cpu().numpy()}")
 

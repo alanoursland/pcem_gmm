@@ -40,6 +40,27 @@ def compute_confusion_matrix(true_labels, predicted_labels):
     accuracy = reordered_conf_matrix.trace() / reordered_conf_matrix.sum()
     return reordered_conf_matrix, accuracy
 
+def compute_clustering_metrics(true_labels, predicted_labels):
+    """
+    Compute clustering metrics: confusion matrix and clustering accuracy.
+    :param true_labels: Ground truth labels (true cluster assignments)
+    :param predicted_labels: Predicted cluster assignments from the model
+    :return: confusion_matrix, accuracy
+    """
+    # Compute confusion matrix
+    conf_matrix = confusion_matrix(true_labels, predicted_labels)
+    
+    # Use the Hungarian algorithm (linear_sum_assignment) to optimally align clusters
+    row_ind, col_ind = linear_sum_assignment(-conf_matrix)  # Solve for best alignment
+    
+    # Reorder the confusion matrix for optimal cluster matching
+    reordered_conf_matrix = conf_matrix[row_ind][:, col_ind]
+    
+    # Calculate accuracy (correctly predicted points divided by total points)
+    accuracy = reordered_conf_matrix.trace() / reordered_conf_matrix.sum()
+
+    return reordered_conf_matrix, accuracy
+    
 # ========================
 # Model Evaluation Metrics
 # ========================

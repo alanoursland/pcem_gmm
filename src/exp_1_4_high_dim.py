@@ -4,6 +4,7 @@ import time
 from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA
 from pcem import ComponentGMM, ComponentGaussian
+from metrics import compare_means, compare_eigenvalues, compare_eigenvectors, calculate_ari, calculate_silhouette_score, compute_clustering_metrics
 
 def sigmoid(x, midpoint=0.5, steepness=10):
     """Sigmoid function for eigenvalue decay."""
@@ -89,3 +90,62 @@ for dim in dimensions_list:
     print(f"Standard GMM Time: {gmm_time} sec")
     print(f"PCA-GMM Time: {pca_time:.2f} sec")
     # print(f"PCEM-GMM Converged in {pcem_model.n_iterations_} iterations")
+
+    # ====== Groundtruth: CEM-GMM ======
+    # print(" ========================= Groundtruth: CEM-GMM ========================= ")
+    # responsibilities, _ = groundtruth.e_step(x)
+    # component_assignments = torch.argmax(responsibilities, dim=1).cpu().numpy()
+    # conf_matrix, accuracy = compute_clustering_metrics(y, component_assignments)
+    # print("Groundtruth Confusion Matrix:\n", conf_matrix)
+    # print("Groundtruth Clustering Accuracy:", accuracy)
+
+    # # Extract ground truth parameters
+    # ground_means = np.array([c.mean.cpu().numpy() for c in groundtruth.components])
+    # ground_covariances = [
+    #     c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
+    #     for c in groundtruth.components
+    # ]    
+    # print_model_parameters("Ground Truth GMM", ground_means, ground_covariances)
+
+    # # ====== Experiment: CEM-GMM ======
+    # print(" ========================= Experiment: CEM-GMM ========================= ")
+    # responsibilities, _ = groundtruth.e_step(x)
+    # component_assignments = torch.argmax(responsibilities, dim=1).cpu().numpy()
+    # conf_matrix, accuracy = compute_clustering_metrics(y, component_assignments)
+    # print("PCEM-GMM Confusion Matrix:\n", conf_matrix)
+    # print("PCEM-GMM Clustering Accuracy:", accuracy)
+
+    # # Compare means, eigenvalues, and eigenvectors using metrics
+    # for i, component in enumerate(groundtruth.components):
+    #     print(f"\nComparing Component {i+1}:")
+    #     mean_diff = compare_means(component.mean.cpu().numpy(), groundtruth.components[i].mean.cpu().numpy())
+    #     print(f"Mean Difference (Component {i+1}): {mean_diff}")
+
+    #     eigenvalue_diff = compare_eigenvalues(component.eigenvalues.cpu().numpy(), groundtruth.components[i].eigenvalues.cpu().numpy())
+    #     print(f"Eigenvalue Difference (Component {i+1}): {eigenvalue_diff}")
+
+    #     eigenvector_diff = compare_eigenvectors(component.eigenvectors.T.cpu().numpy(), groundtruth.components[i].eigenvectors.T.cpu().numpy())
+    #     print(f"Eigenvector Difference (Component {i+1}): {eigenvector_diff}")
+
+    # # Clustering metrics: ARI and Silhouette Score for Standard GMM
+    # ari_score = calculate_ari(y, component_assignments)
+    # silhouette_score = calculate_silhouette_score(x, component_assignments)
+
+    # print(f"\nAdjusted Rand Index (ARI): {ari_score}")
+    # print(f"Silhouette Score: {silhouette_score}")
+    
+    # ====== Baseline: Standard GMM ======
+    print(" ========================= Baseline: Standard GMM  ========================= ")
+    gmm_assignments = gmm.predict(x.cpu().numpy())
+    conf_matrix_gmm, accuracy_gmm = compute_clustering_metrics(y.cpu(), gmm_assignments)
+    print("\nStandard GMM Confusion Matrix:\n", conf_matrix_gmm)
+    print("Standard GMM Clustering Accuracy:", accuracy_gmm)
+    print(f"Standard GMM Silhouette Score: {calculate_silhouette_score(x.cpu(), gmm_assignments)}")
+
+    # ====== Baseline: PCA-GMM ======
+    print(" ========================= Baseline: PCA-GMM  ========================= ")
+    pca_gmm_assignments = pca_gmm.predict(reduced_samples)
+    conf_matrix_pca_gmm, accuracy_pca_gmm = compute_clustering_metrics(y.cpu(), pca_gmm_assignments)
+    print("\nPCA-GMM Confusion Matrix:\n", conf_matrix_pca_gmm)
+    print("PCA-GMM Clustering Accuracy:", accuracy_pca_gmm)
+    print(f"PCA-GMM Silhouette Score: {calculate_silhouette_score(reduced_samples, pca_gmm_assignments)}")

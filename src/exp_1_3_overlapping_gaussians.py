@@ -11,6 +11,7 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.mixture import GaussianMixture
 from matplotlib.patches import Ellipse
 from pcem import ComponentGaussian, ComponentGMM
+from metrics import compare_means, compare_eigenvalues, compare_eigenvectors, calculate_ari, calculate_silhouette_score
 
 def create_groundtruth():
     # Create a ground truth GMM with 2 overlapping components in 2D
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     # model.components[1].set_mean(torch.tensor([1.0, -1.0], device=device))
 
     # K-means initialization for means
-    kmeans = KMeans(n_clusters=2, random_state=42).fit(samples)
+    kmeans = KMeans(n_clusters=2, random_state=42, n_init='auto').fit(samples)
     initial_means = torch.tensor(kmeans.cluster_centers_, device=device)
     model.components[0].set_mean(initial_means[0])
     model.components[1].set_mean(initial_means[1])
@@ -111,7 +112,26 @@ if __name__ == "__main__":
     ]
     print_model_parameters("PCEM-GMM", pcem_means, pcem_covariances)
 
-    # ====== Baseline: Standard GMM (Full Covariance) ======
+    # Compare means, eigenvalues, and eigenvectors using metrics
+    for i, component in enumerate(model.components):
+        print(f"\nComparing Component {i+1}:")
+        mean_diff = compare_means(groundtruth.components[i].mean.cpu().numpy(), component.mean.cpu().numpy())
+        print(f"Mean Difference (Component {i+1}): {mean_diff}")
+
+        eigenvalue_diff = compare_eigenvalues(groundtruth.components[i].eigenvalues.cpu().numpy(), component.eigenvalues.cpu().numpy())
+        print(f"Eigenvalue Difference (Component {i+1}): {eigenvalue_diff}")
+
+        eigenvector_diff = compare_eigenvectors(groundtruth.components[i].eigenvectors.T.cpu().numpy(), component.eigenvectors.T.cpu().numpy())
+        print(f"Eigenvector Difference (Component {i+1}): {eigenvector_diff}")
+
+    # Clustering metrics: ARI and Silhouette Score
+    ari_score = calculate_ari(sample_source, component_assignments)
+    silhouette_score = calculate_silhouette_score(samples, component_assignments)
+
+    print(f"\nAdjusted Rand Index (ARI): {ari_score}")
+    print(f"Silhouette Score: {silhouette_score}")
+
+    # ====== Baseline: Standard GMM ======
     print(" ========================= Baseline: Standard GMM  ========================= ")
     gmm = GaussianMixture(n_components=2, covariance_type='full', random_state=42)
     gmm.fit(samples)
@@ -121,7 +141,12 @@ if __name__ == "__main__":
     print("Standard GMM Clustering Accuracy:", accuracy_gmm)
     print_model_parameters("Standard GMM", gmm.means_, gmm.covariances_)
 
-    # ====== Baseline: PCA-GMM (Dimensionality Reduction First) ======
+
+    # Calculate Silhouette Score for Standard GMM
+    silhouette_score_gmm = calculate_silhouette_score(samples, gmm_assignments)
+    print(f"Standard GMM Silhouette Score: {silhouette_score_gmm}")
+
+    # ====== Baseline: PCA-GMM ======
     print(" ========================= Baseline: PCA-GMM  ========================= ")
     pca = PCA(n_components=2)
     reduced_samples = pca.fit_transform(samples)
@@ -133,13 +158,17 @@ if __name__ == "__main__":
     print("PCA-GMM Clustering Accuracy:", accuracy_pca_gmm)
     print_model_parameters("PCA-GMM", pca_gmm.means_, pca_gmm.covariances_)
 
+    # Calculate Silhouette Score for PCA-GMM
+    silhouette_score_pca_gmm = calculate_silhouette_score(reduced_samples, pca_gmm_assignments)
+    print(f"PCA-GMM Silhouette Score: {silhouette_score_pca_gmm}")
+
     # # Plot results
-    # plt.figure(figsize=(10, 8))
-    # plt.scatter(samples[:, 0], samples[:, 1], c=sample_source, cmap='coolwarm', alpha=0.5, label='True Labels')
-    # plt.scatter(samples[:, 0], samples[:, 1], c=component_assignments, cmap='coolwarm', alpha=0.3, label='PCEM-GMM Assignments')
-    # plt.legend()
-    # plt.title("PCEM-GMM Clustering on Overlapping 2D Gaussian Mixture")
-    # plt.xlabel("Feature 1")
-    # plt.ylabel("Feature 2")
-    # plt.grid(True)
-    # plt.show()
+    plt.figure(figsize=(10, 8))
+    plt.scatter(samples[:, 0], samples[:, 1], c=sample_source, cmap='coolwarm', alpha=0.5, label='True Labels')
+    plt.scatter(samples[:, 0], samples[:, 1], c=component_assignments, cmap='coolwarm', alpha=0.3, label='PCEM-GMM Assignments')
+    plt.legend()
+    plt.title("PCEM-GMM Clustering on Overlapping 2D Gaussian Mixture")
+    plt.xlabel("Feature 1")
+    plt.ylabel("Feature 2")
+    plt.grid(True)
+    plt.show()

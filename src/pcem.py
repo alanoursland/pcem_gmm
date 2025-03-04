@@ -278,7 +278,7 @@ class ComponentGaussian(nn.Module):
         
         return self
 
-class ComponentGMM:
+class ComponentGMM(nn.Module):
     """
     Gaussian Mixture Model implementation using Principal Component EM (PCEM)
     with ComponentGaussian objects.
@@ -288,6 +288,7 @@ class ComponentGMM:
                  max_iterations: int = 100, 
                  tolerance: float = 1e-4,
                  random_state: Optional[int] = None,
+                 requires_grad=False,
                  device: Optional[torch.device] = None):
         """
         Initialize the ComponentGMM model.
@@ -300,6 +301,8 @@ class ComponentGMM:
             random_state: Random seed for reproducibility
             device: Device to run computations on (CPU/GPU)
         """
+        super(ComponentGMM, self).__init__()
+
         self.n_components = n_components
         self.n_dimensions = n_dimensions
         self.max_iterations = max_iterations
@@ -313,14 +316,40 @@ class ComponentGMM:
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize components and mixing coefficients
-        self.components = [ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_components)]
-        self.mixing_coeffs = torch.ones(n_components, device=self.device) / n_components
+        self.components = nn.ModuleList([ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_components)])
+        self.mixing_coeffs = nn.Parameter(torch.ones(n_components, device=self.device) / n_components)
         
         # For convergence tracking
         self.log_likelihood_history = []
         self.n_iterations_ = 0
         self.converged_ = False
+        self.use_grad(requires_grad)
+
+    def use_grad(self, requires_grad=True):
+        """
+        Enable or disable gradient tracking for all parameters in this module.
         
+        :param requires_grad: Boolean indicating whether gradients should be tracked
+        :return: self (for method chaining)
+        """
+        for param in self.parameters():
+            param.requires_grad_(requires_grad)
+        return self
+
+    def forward(self, x: torch.Tensor):
+        """
+        Override forward method. For now, this could be a dummy method, as PCEM-GMM works through fit and e_step.
+        """
+        raise "NotImplemented"
+
+    def to(self, device: torch.device):
+        """
+        Override the to() method inherited from nn.Module to move the entire model to the specified device.
+        """
+        super(ComponentGMM, self).to(device)  # Call the parent class' to method
+        self.device = device
+        return self
+
     def fit(self, x: torch.Tensor) -> 'ComponentGMM':
         """
         Fit the GMM to the data using the EM algorithm.
@@ -459,7 +488,21 @@ class ComponentGMM:
             return samples[perm], labels[perm]
         else:
             return torch.zeros((0, self.n_dimensions), device=self.device), torch.zeros((0,), dtype=torch.long, device=self.device)
-    
+
+    def get_cluster_assignments(self, data):
+            """
+            Assign each data point to the cluster with the highest responsibility.
+            This function assumes that the model's parameters are already fitted.
+            
+            :param data: Tensor of shape [n_samples, n_dimensions] representing the data
+            :return: Tensor of shape [n_samples] containing the index of the most likely cluster for each data point
+            """
+            # Compute the responsibilities (E-step)
+            responsibilities, _ = self.e_step(data)
+            
+            # Return the index of the cluster with the highest responsibility for each data point
+            return torch.argmax(responsibilities, dim=1)
+
     def calculate_log_likelihood(self, x: torch.Tensor) -> torch.Tensor:
         """
         Calculate the log-likelihood of the data under the current model.

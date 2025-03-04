@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-
 from pcem import ComponentGaussian
+from metrics import compare_means, compare_eigenvalues, compare_eigenvectors
 
 if __name__ == "__main__":
     torch.manual_seed(42)
@@ -40,3 +40,16 @@ if __name__ == "__main__":
 
     print("\nTrue Eigenvectors:\n", ground_truth.eigenvectors)
     print("Estimated Eigenvectors:\n", model.eigenvectors)
+
+    print()
+    # Compare means
+    mean_diff = compare_means(ground_truth.mean.cpu().numpy(), model.mean.cpu().numpy())
+    print(f"Mean Difference: {mean_diff}")
+
+    # Compare eigenvalues
+    eigenvalue_diff = compare_eigenvalues(ground_truth.eigenvalues.cpu().numpy(), model.eigenvalues.cpu().numpy())
+    print(f"Eigenvalue Difference: {eigenvalue_diff}")
+
+    # Compare eigenvectors
+    eigenvector_diff = compare_eigenvectors(ground_truth.eigenvectors.cpu().numpy(), model.eigenvectors.cpu().numpy())
+    print(f"Eigenvector Difference (radians): {eigenvector_diff}")

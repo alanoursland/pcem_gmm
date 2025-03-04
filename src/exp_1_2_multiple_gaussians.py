@@ -1,13 +1,12 @@
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-
 from matplotlib.patches import Ellipse
 from pcem import ComponentGaussian, ComponentGMM
 from scipy.linalg import eigh
 from sklearn.cluster import KMeans
+from metrics import compare_means, compare_eigenvalues, compare_eigenvectors, calculate_ari, calculate_silhouette_score
 
 def create_groundtruth():
     # Create a ground truth GMM with 2 components in 2D
@@ -45,7 +44,7 @@ if __name__ == "__main__":
     )
 
     # K-means initialization for means
-    kmeans = KMeans(n_clusters=2, random_state=42).fit(samples.cpu().numpy())
+    kmeans = KMeans(n_clusters=2, random_state=42, n_init='auto').fit(samples.cpu().numpy())
     initial_means = torch.tensor(kmeans.cluster_centers_, device=device)
     model.components[0].set_mean(initial_means[0])
     model.components[1].set_mean(initial_means[1])
@@ -96,18 +95,35 @@ if __name__ == "__main__":
     print("Model 1:", model1.eigenvectors.T.cpu().numpy())
     print("Model 2:", model2.eigenvectors.T.cpu().numpy())
 
-    # Plot results
+    # Compare means, eigenvalues, and eigenvectors using metrics
+    mean_diff = compare_means(ground1.mean.cpu().numpy(), model1.mean.cpu().numpy())
+    print(f"Mean Difference (Model 1): {mean_diff}")
+    mean_diff = compare_means(ground2.mean.cpu().numpy(), model2.mean.cpu().numpy())
+    print(f"Mean Difference (Model 2): {mean_diff}")
 
-    # Get ground truth data assignments
-    # For visualization, we need to know which component generated each sample
-    # This isn't directly available from sample(), so we can compute it afterwards
+    eigenvalue_diff = compare_eigenvalues(ground1.eigenvalues.cpu().numpy(), model1.eigenvalues.cpu().numpy())
+    print(f"Eigenvalue Difference (Model 1): {eigenvalue_diff}")
+    eigenvalue_diff = compare_eigenvalues(ground2.eigenvalues.cpu().numpy(), model2.eigenvalues.cpu().numpy())
+    print(f"Eigenvalue Difference (Model 2): {eigenvalue_diff}")
+
+    eigenvector_diff = compare_eigenvectors(ground1.eigenvectors.T.cpu().numpy(), model1.eigenvectors.T.cpu().numpy())
+    print(f"Eigenvector Difference (Model 1): {eigenvector_diff}")
+    eigenvector_diff = compare_eigenvectors(ground2.eigenvectors.T.cpu().numpy(), model2.eigenvectors.T.cpu().numpy())
+    print(f"Eigenvector Difference (Model 2): {eigenvector_diff}")
+
+    # Clustering metrics: ARI and Silhouette Score
     responsibilities, _ = groundtruth.e_step(samples)
     sample_source = torch.argmax(responsibilities, dim=1)
+    ari_score = calculate_ari(sample_source.cpu().numpy(), model.get_cluster_assignments(samples).cpu().numpy())
+    silhouette_score = calculate_silhouette_score(samples.cpu(), model.get_cluster_assignments(samples).cpu().numpy())
 
+    print(f"\nAdjusted Rand Index (ARI): {ari_score}")
+    print(f"Silhouette Score: {silhouette_score}")
+
+    # Plot results
     # Get model data assignments
     responsibilities, _ = groundtruth.e_step(samples)
     component_assignments = torch.argmax(responsibilities, dim=1)
-
 
     # ======== Create the Plot ========
     plt.figure(figsize=(10, 8))

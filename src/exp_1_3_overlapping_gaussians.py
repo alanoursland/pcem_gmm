@@ -14,16 +14,16 @@ from pcem import ComponentGaussian, ComponentGMM
 from metrics import compare_means, compare_eigenvalues, compare_eigenvectors, calculate_ari, calculate_silhouette_score
 
 def create_groundtruth():
-    # Create a ground truth GMM with 2 overlapping components in 2D
-    groundtruth = ComponentGMM(n_components=2, n_dimensions=2, device=device)
+    # Create a ground truth GMM with 2 overlapping gaussians in 2D
+    groundtruth = ComponentGMM(n_gaussians=2, n_dimensions=2, device=device)
 
     # Configure the first component (slightly shifted mean, different covariance)
-    groundtruth.components[0].set_mean(torch.tensor([-1.0, 1.0], device=device))
-    groundtruth.components[0].set_eigenvalues(torch.tensor([3.0, 0.5], device=device))
+    groundtruth.gaussians[0].set_mean(torch.tensor([-1.0, 1.0], device=device))
+    groundtruth.gaussians[0].set_eigenvalues(torch.tensor([3.0, 0.5], device=device))
 
     # Configure the second component (overlapping mean, different shape)
-    groundtruth.components[1].set_mean(torch.tensor([1.0, -1.0], device=device))
-    groundtruth.components[1].set_eigenvalues(torch.tensor([2.5, 1.5], device=device))
+    groundtruth.gaussians[1].set_mean(torch.tensor([1.0, -1.0], device=device))
+    groundtruth.gaussians[1].set_eigenvalues(torch.tensor([2.5, 1.5], device=device))
 
     return groundtruth
 
@@ -56,9 +56,9 @@ if __name__ == "__main__":
 
     print("\n[Experiment] Running PCEM-GMM on overlapping 2D Gaussian mixture data...\n")
 
-    # Initialize ComponentGMM with 2 components in 2D
+    # Initialize ComponentGMM with 2 gaussians in 2D
     model = ComponentGMM(
-        n_components=2, 
+        n_gaussians=2, 
         n_dimensions=2, 
         max_iterations=50, 
         tolerance=1e-6, 
@@ -66,14 +66,14 @@ if __name__ == "__main__":
     )
 
     # # Simulate k-means initialization
-    # model.components[0].set_mean(torch.tensor([-1.0, 1.0], device=device))
-    # model.components[1].set_mean(torch.tensor([1.0, -1.0], device=device))
+    # model.gaussians[0].set_mean(torch.tensor([-1.0, 1.0], device=device))
+    # model.gaussians[1].set_mean(torch.tensor([1.0, -1.0], device=device))
 
     # K-means initialization for means
     kmeans = KMeans(n_clusters=2, random_state=42, n_init='auto').fit(samples)
     initial_means = torch.tensor(kmeans.cluster_centers_, device=device)
-    model.components[0].set_mean(initial_means[0])
-    model.components[1].set_mean(initial_means[1])
+    model.gaussians[0].set_mean(initial_means[0])
+    model.gaussians[1].set_mean(initial_means[1])
 
     # Fit the model to the data
     model.fit(torch.tensor(samples, device=device))
@@ -88,10 +88,10 @@ if __name__ == "__main__":
     print("Groundtruth Clustering Accuracy:", accuracy)
 
     # Extract ground truth parameters
-    ground_means = np.array([c.mean.cpu().numpy() for c in groundtruth.components])
+    ground_means = np.array([c.mean.cpu().numpy() for c in groundtruth.gaussians])
     ground_covariances = [
         c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
-        for c in groundtruth.components
+        for c in groundtruth.gaussians
     ]    
     print_model_parameters("Ground Truth GMM", ground_means, ground_covariances)
 
@@ -105,23 +105,23 @@ if __name__ == "__main__":
     print("PCEM-GMM Clustering Accuracy:", accuracy)
 
     # Extract PCEM-GMM parameters
-    pcem_means = np.array([c.mean.cpu().numpy() for c in model.components])
+    pcem_means = np.array([c.mean.cpu().numpy() for c in model.gaussians])
     pcem_covariances = [
         c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
-        for c in model.components
+        for c in model.gaussians
     ]
     print_model_parameters("PCEM-GMM", pcem_means, pcem_covariances)
 
     # Compare means, eigenvalues, and eigenvectors using metrics
-    for i, component in enumerate(model.components):
+    for i, component in enumerate(model.gaussians):
         print(f"\nComparing Component {i+1}:")
-        mean_diff = compare_means(groundtruth.components[i].mean.cpu().numpy(), component.mean.cpu().numpy())
+        mean_diff = compare_means(groundtruth.gaussians[i].mean.cpu().numpy(), component.mean.cpu().numpy())
         print(f"Mean Difference (Component {i+1}): {mean_diff}")
 
-        eigenvalue_diff = compare_eigenvalues(groundtruth.components[i].eigenvalues.cpu().numpy(), component.eigenvalues.cpu().numpy())
+        eigenvalue_diff = compare_eigenvalues(groundtruth.gaussians[i].eigenvalues.cpu().numpy(), component.eigenvalues.cpu().numpy())
         print(f"Eigenvalue Difference (Component {i+1}): {eigenvalue_diff}")
 
-        eigenvector_diff = compare_eigenvectors(groundtruth.components[i].eigenvectors.T.cpu().numpy(), component.eigenvectors.T.cpu().numpy())
+        eigenvector_diff = compare_eigenvectors(groundtruth.gaussians[i].eigenvectors.T.cpu().numpy(), component.eigenvectors.T.cpu().numpy())
         print(f"Eigenvector Difference (Component {i+1}): {eigenvector_diff}")
 
     # Clustering metrics: ARI and Silhouette Score
@@ -130,6 +130,20 @@ if __name__ == "__main__":
 
     print(f"\nAdjusted Rand Index (ARI): {ari_score}")
     print(f"Silhouette Score: {silhouette_score}")
+
+    # After fitting, before comparison
+    def match_components(groundtruth, model):
+        from scipy.spatial.distance import cdist
+        means_true = torch.stack([c.mean for c in groundtruth.gaussians]).cpu().numpy()
+        means_est = torch.stack([c.mean for c in model.gaussians]).cpu().numpy()
+        dists = cdist(means_true, means_est)
+        idx = np.argmin(dists, axis=1)  # Match each true to closest estimated
+        return [model.gaussians[i] for i in idx], idx
+
+    # Replace model1, model2 assignment
+    matched_components, match_idx = match_components(groundtruth, model)
+    model1, model2 = matched_components
+    print(f"Component Matching Order: {match_idx}")
 
     # ====== Baseline: Standard GMM ======
     print(" ========================= Baseline: Standard GMM  ========================= ")
@@ -163,9 +177,30 @@ if __name__ == "__main__":
     print(f"PCA-GMM Silhouette Score: {silhouette_score_pca_gmm}")
 
     # # Plot results
+    def plot_cov_ellipse(pos, cov, nstd=2, ax=None, **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        evals, evecs = eigh(cov)
+        angle = np.degrees(np.arctan2(evecs[1, 0], evecs[0, 0]))
+        width, height = 2 * nstd * np.sqrt(evals)
+        ellip = Ellipse(xy=pos, width=width, height=height, angle=angle, **kwargs)
+        ax.add_patch(ellip)
+        return ellip
+    
     plt.figure(figsize=(10, 8))
     plt.scatter(samples[:, 0], samples[:, 1], c=sample_source, cmap='coolwarm', alpha=0.5, label='True Labels')
     plt.scatter(samples[:, 0], samples[:, 1], c=component_assignments, cmap='coolwarm', alpha=0.3, label='PCEM-GMM Assignments')
+
+    # Ground truth ellipses
+    for i, c in enumerate(groundtruth.gaussians):
+        cov = c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
+        plot_cov_ellipse(c.mean.cpu().numpy(), cov, alpha=0.3, color='green', label=f'True Cov {i+1}' if i == 0 else None)
+
+    # PCEM ellipses
+    for i, c in enumerate(matched_components):
+        cov = c.eigenvectors.cpu().numpy() @ np.diag(c.eigenvalues.cpu().numpy()) @ c.eigenvectors.T.cpu().numpy()
+        plot_cov_ellipse(c.mean.cpu().numpy(), cov, alpha=0.3, color='black', label=f'PCEM Cov {i+1}' if i == 0 else None)
+
     plt.legend()
     plt.title("PCEM-GMM Clustering on Overlapping 2D Gaussian Mixture")
     plt.xlabel("Feature 1")

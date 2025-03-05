@@ -176,7 +176,36 @@ class ComponentGaussian(nn.Module):
 
         return v, eigenvalue
 
-    def calculate_density(self, data):
+    def calculate_squared_mahalanobis_distance(self, data):
+        """
+        Calculate the squared Mahalanobis distance for a batch of samples based on this Gaussian component.
+
+        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
+        :return: Mahalanobis distance for the sample
+        """
+        # Step 1: Center the samples by subtracting the mean
+        centered_data = data - self.mean
+
+        # Step 2: Project the centered data onto the eigenvector space (principal component space)
+        projected_data = torch.matmul(centered_data, self.eigenvectors)  # (1D sample x eigenvectors matrix)
+
+        # Step 3: Compute the Mahalanobis distance squared (using the eigenvalues for scaling)
+        mahalanobis_sq = torch.sum((projected_data ** 2) / (self.eigenvalues.unsqueeze(0) + 1e-6))  # Adding epsilon for stability
+        
+        # Return the squared Mahalanobis distance
+        return mahalanobis_sq
+    
+    def calculate_mahalanobis_distance(self, data):
+        """
+        Calculate the Mahalanobis distance for a batch of samples based on this Gaussian component.
+
+        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
+        :return: Mahalanobis distance for the sample
+        """
+        # Return the Mahalanobis distance (not squared)
+        return torch.sqrt(self.calculate_squared_mahalanobis_distance(data))
+    
+    def calculate_likelihood(self, data):
         """
         Calculate the unnormalized responsibilities (likelihoods) for each data point
         belonging to this Gaussian component.
@@ -187,15 +216,8 @@ class ComponentGaussian(nn.Module):
         d = self.mean.shape[0]
         device = self.mean.device
         
-        # Center the data
-        centered_data = data - self.mean
-
-        # Project data onto eigenvector space
-        projected_data = centered_data @ self.eigenvectors
-
         # Compute Mahalanobis distance squared
-        scaled_distances = (projected_data ** 2) / (self.eigenvalues.unsqueeze(0) + 1e-6)
-        mahalanobis_sq = scaled_distances.sum(dim=1)
+        mahalanobis_sq = self.calculate_squared_mahalanobis_distance(data)
 
         # Compute log determinant of covariance (with stability term)
         log_det = torch.log(self.eigenvalues + 1e-6).sum()
@@ -317,7 +339,6 @@ class ComponentGMM(nn.Module):
         
         # Initialize components and mixing coefficients
         self.gaussians = nn.ModuleList([ComponentGaussian(n_dimensions, device=self.device) for _ in range(n_gaussians)])
-        print(f"self.gaussians {len(self.gaussians)}")
         self.mixing_coeffs = nn.Parameter(torch.ones(n_gaussians, device=self.device) / n_gaussians)
         # print(f"self.mixing_coeffs {self.mixing_coeffs.size()}")
         
@@ -409,7 +430,7 @@ class ComponentGMM(nn.Module):
         
         for i, gaussian in enumerate(self.gaussians):
             # Get likelihoods from gaussian - keep the (n_samples, 1) shape
-            likelihood = gaussian.calculate_density(x)  # or the original method name
+            likelihood = gaussian.calculate_likelihood(x)  # or the original method name
             component_likelihoods.append(likelihood)
             
             # Apply mixing coefficient (still keeping the shape)
@@ -521,7 +542,7 @@ class ComponentGMM(nn.Module):
         weighted_likelihoods = torch.zeros((n_samples, self.n_gaussians), device=self.device)
         
         for i, gaussian in enumerate(self.gaussians):
-            likelihoods = gaussian.calculate_density(x)
+            likelihoods = gaussian.calculate_likelihood(x)
             weighted_likelihoods[:, i] = likelihoods.squeeze() * self.mixing_coeffs[i]
         
         # Sum likelihoods across components

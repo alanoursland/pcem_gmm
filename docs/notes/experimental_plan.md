@@ -36,7 +36,54 @@ This plan is structured **iteratively**, starting with simple synthetic cases an
 
 ---
 
-### **1.4 Higher-Dimensional Synthetic Gaussians (10D, 50D)**
+### **1.4 Single High-Dimensional Gaussian with Thresholding for Principal Component Extraction**
+
+- **Purpose**:  
+  - Test PCEM-GMM on high-dimensional (e.g., 50D, 100D, or 1000D) synthetic Gaussian data to evaluate its ability to iteratively extract principal components and effectively manage dimensionality reduction. The goal is to assess whether the model can handle increasing dimensions while maintaining computational efficiency.
+  - Introduce a **thresholding parameter** that stops the extraction of additional principal components when their contribution to the total variance drops below a predefined threshold. This allows for early termination of the extraction process, improving both computational efficiency and model performance.
+  - Introduce a **spherical background variance parameter** to account for dropped principal components, modeling the residual variance when components with small contributions are excluded. This helps to preserve important variance from the original high-dimensional Gaussian while maintaining numerical stability.
+
+- **Design**:
+  - **Data Generation**: Generate synthetic Gaussian data in varying dimensions: 10D, 50D, 100D, and 1000D. Each dataset will have a mean vector and eigenvalues assigned to the Gaussian distribution, simulating the true variance structure.
+  - **Threshold Experimentation**:  
+    - Implement **direct thresholding** for individual eigenvalue contributions (e.g., stop extracting components when the eigenvalue is below a certain value).
+    - Use a **percentage thresholding** based on the cumulative eigenvalue sum (e.g., stop when the cumulative variance explained exceeds 95%).
+  - **Sample Size Variations**: Experiment with different sample counts (e.g., 1000, 5000, 10000) to evaluate how sample size affects the accuracy and convergence speed of the algorithm, particularly in higher dimensions.
+  - **Batch Training**: Test batch-wise training with smaller subsets of data, comparing its impact on convergence speed and memory efficiency.
+  - **Baseline Comparison**: Compare PCEM-GMM to standard **GMM** (Gaussian Mixture Model with full covariance estimation) and **PCA-GMM** (PCA-based dimensionality reduction followed by GMM fitting) for performance in terms of:
+    - Eigenvalue recovery
+    - Log-likelihood
+    - Convergence speed
+
+- **Metrics**:
+  - **Parameter Estimation Accuracy**:  
+    - **Eigenvalue Recovery**: Compare estimated eigenvalues to ground truth to evaluate the accuracy of the principal component extraction.
+    - **Eigenvector Estimation**: Compare the estimated principal eigenvectors to the true eigenvectors. This will measure how well the model recovers the directions of maximum variance.
+  - **Calculation Time**: Measure the time taken for model fitting with different dimensionalities and thresholds. Track time-to-convergence, as well as time spent per iteration, to evaluate the scalability of the approach.
+  - **Convergence Behavior**:  
+    - Track the number of iterations needed for convergence with different thresholds and sample sizes.
+    - Analyze the log-likelihood change per iteration to monitor whether the algorithm converges to a stable solution.
+  - **Threshold Sensitivity**:  
+    - Analyze the impact of varying threshold values (for both direct and percentage-based thresholds) on the final model parameters and computational efficiency.
+    - Measure how different stopping criteria influence the accuracy of recovered eigenvalues and eigenvectors compared to the true values.
+  - **Variance Capture**:  
+    - Calculate the proportion of total variance explained by the selected components for each thresholding method. Evaluate how well the model captures the majority of the variance when fewer components are retained.
+    - Compare how much variance is retained when spherical background variance is used, to see how much residual variance is captured and its effect on the model's stability.
+  - **Sample Size and Dimensionality Sensitivity**:  
+    - Evaluate how different sample sizes influence convergence accuracy, particularly as dimensionality increases.
+    - Assess the relationship between sample size and accuracy of the eigenvalue recovery.
+
+- **Expected Outcome**:  
+  - **Effective Component Extraction**: PCEM-GMM should successfully extract the most significant components (those with the largest eigenvalues) and stop the extraction process when the remaining components contribute negligibly to the overall variance. The thresholding mechanism should help the algorithm converge faster in higher-dimensional spaces without losing significant variance.
+  - **Stable and Efficient Performance**: The model should remain numerically stable even in high-dimensional settings (e.g., 1000D), while demonstrating improved computational efficiency with thresholding. The spherical background variance parameter will allow the model to handle residual variance effectively without overfitting.
+  - **Comparison to Baseline Methods**:  
+    - PCEM-GMM should outperform standard GMM in terms of computational efficiency in high-dimensional spaces, as it avoids full covariance matrix estimation.  
+    - It should perform comparably or better than PCA-GMM by retaining more variance in the principal components dynamically (without requiring pre-dimensionality reduction).  
+    - The threshold-based stopping criterion should strike a balance between model accuracy and computational speed, particularly in terms of convergence time and variance capture.
+
+---
+
+### **1.5 Higher-Dimensional Synthetic Gaussians (10D, 50D)**
 - **Purpose**: Stress-test numerical stability and efficiency in **high dimensions**.
 - **Design**:
   - Multiple Gaussians in 10D and 50D.

@@ -52,186 +52,6 @@ class ComponentGaussian(nn.Module):
         self.eigenvalues = nn.Parameter(eigenvalues)
         self.use_grad(requires_grad)
 
-    def use_grad(self, requires_grad=True):
-        """
-        Enable or disable gradient tracking for all parameters in this module.
-        
-        :param requires_grad: Boolean indicating whether gradients should be tracked
-        :return: self (for method chaining)
-        """
-        for param in self.parameters():
-            param.requires_grad_(requires_grad)
-        return self
-
-    def set_mean(self, mean_tensor):
-        """Set new values for the mean parameter"""
-        self.mean.data.copy_(mean_tensor)
-        return self
-        
-    def set_eigenvectors(self, eigenvectors_tensor):
-        """Set new values for the eigenvectors parameter"""
-        self.eigenvectors.data.copy_(eigenvectors_tensor)
-        return self
-        
-    def set_eigenvalues(self, eigenvalues_tensor):
-        """Set new values for the eigenvalues parameter"""
-        self.eigenvalues.data.copy_(eigenvalues_tensor)
-        return self
-
-    def forward(self, num_samples):
-        """
-        Generate samples from the Gaussian distribution.
-        This is equivalent to the sample method but follows PyTorch convention.
-        
-        :param num_samples: Number of samples to generate.
-        :return: Tensor of shape (num_samples, d) containing generated samples.
-        """
-        raise "NotImplemented" 
-    
-    def sample(self, num_samples):
-        """
-        Generate samples from the Gaussian distribution using its principal components.
-        
-        :param num_samples: Number of samples to generate.
-        :return: Tensor of shape (num_samples, d) containing generated samples.
-        """
-        d = self.mean.shape[0]  # Dimensionality
-        
-        # Generate standard normal samples
-        z = torch.randn(num_samples, d, device=self.mean.device)
-        
-        # Scale by sqrt of eigenvalues (standard deviations along principal axes)
-        scaled_samples = z * torch.sqrt(self.eigenvalues).unsqueeze(0)
-        
-        # Transform into original space using eigenvectors
-        transformed_samples = scaled_samples @ self.eigenvectors.T
-        
-        # Shift by mean
-        samples = transformed_samples + self.mean
-        
-        return samples
-
-    def _rayleigh_quotient_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
-        """
-        Rayleigh Quotient Iteration to find the dominant eigenvector and eigenvalue.
-        """
-        device = self.mean.device
-        v = torch.randn(scatter_matrix.shape[0], device=device)
-        v /= torch.norm(v)
-
-        # print("\n[Rayleigh Quotient Iteration] Starting...")
-
-        for i in range(num_iters):
-            v_new = scatter_matrix @ v
-            v_new /= torch.norm(v_new)  # Normalization (same as power iteration)
-
-            eigenvalue = (v_new @ scatter_matrix @ v_new).item()  # Rayleigh Quotient
-            
-            diff = torch.norm(v_new - v)
-            # print(f"  Iter {i+1}: Eigenvalue = {eigenvalue:.6f}, Change in eigenvector = {diff:.6f}")
-
-            if diff < tol:
-                # print("  Converged.")
-                break
-
-            v = v_new
-
-        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
-        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
-
-        return v, eigenvalue
-
-    def _power_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
-        """
-        Power Iteration to find the dominant eigenvector of matrix scatter_matrix.
-        """
-        device = self.mean.device
-
-        # random start
-        v = torch.randn(scatter_matrix.shape[0], device=device)
-        v /= torch.norm(v)
-
-        # initialize v as the mean direction
-        # v = torch.mean(centered_data, dim=0)
-        # v /= torch.norm(v)
-
-        # print("\n[Power Iteration] Starting...")
-        
-        for i in range(num_iters):
-            v_new = scatter_matrix @ v
-            v_new /= torch.norm(v_new)
-
-            diff = torch.norm(v_new - v)
-            # print(f"  Iter {i+1}: Change in eigenvector = {diff:.6f}")
-
-            if diff < tol:
-                # print("  Converged.")
-                break
-
-            v = v_new
-
-        eigenvalue = (v @ scatter_matrix @ v).item()
-        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
-        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
-
-        return v, eigenvalue
-
-    def calculate_squared_mahalanobis_distance(self, data):
-        """
-        Calculate the squared Mahalanobis distance for a batch of samples based on this Gaussian component.
-
-        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
-        :return: Mahalanobis distance for the sample
-        """
-        # Step 1: Center the samples by subtracting the mean
-        centered_data = data - self.mean
-
-        # Step 2: Project the centered data onto the eigenvector space (principal component space)
-        projected_data = torch.matmul(centered_data, self.eigenvectors)  # (1D sample x eigenvectors matrix)
-
-        # Step 3: Compute the Mahalanobis distance squared (using the eigenvalues for scaling)
-        mahalanobis_sq = torch.sum((projected_data ** 2) / (self.eigenvalues.unsqueeze(0) + 1e-6))  # Adding epsilon for stability
-        
-        # Return the squared Mahalanobis distance
-        return mahalanobis_sq
-    
-    def calculate_mahalanobis_distance(self, data):
-        """
-        Calculate the Mahalanobis distance for a batch of samples based on this Gaussian component.
-
-        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
-        :return: Mahalanobis distance for the sample
-        """
-        # Return the Mahalanobis distance (not squared)
-        return torch.sqrt(self.calculate_squared_mahalanobis_distance(data))
-    
-    def calculate_likelihood(self, data):
-        """
-        Calculate the unnormalized responsibilities (likelihoods) for each data point
-        belonging to this Gaussian component.
-
-        :param data: Tensor of shape (n_samples, dimensionality)
-        :return: Tensor of shape (n_samples, 1) containing unnormalized responsibilities
-        """
-        d = self.mean.shape[0]
-        device = self.mean.device
-        
-        # Compute Mahalanobis distance squared
-        mahalanobis_sq = self.calculate_squared_mahalanobis_distance(data)
-
-        # Compute log determinant of covariance (with stability term)
-        log_det = torch.log(self.eigenvalues + 1e-6).sum()
-
-        # Compute log likelihood
-        log_likelihood = -0.5 * (d * torch.log(2 * torch.tensor(torch.pi, device=device)) 
-                                + log_det 
-                                + mahalanobis_sq)
-
-        # Convert to likelihoods (unnormalized responsibilities)
-        likelihoods = torch.exp(log_likelihood).unsqueeze(1)
-
-        return likelihoods  # Should be normalized externally in GMM
-
     def fit(self, data, responsibilities):
         """
         Modified M-step: Extract principal components iteratively.
@@ -299,6 +119,186 @@ class ComponentGaussian(nn.Module):
         self.set_eigenvalues(torch.tensor(eigenvalues, device=data.device))
         
         return self
+
+    def _power_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
+        """
+        Power Iteration to find the dominant eigenvector of matrix scatter_matrix.
+        """
+        device = self.mean.device
+
+        # random start
+        v = torch.randn(scatter_matrix.shape[0], device=device)
+        v /= torch.norm(v)
+
+        # initialize v as the mean direction
+        # v = torch.mean(centered_data, dim=0)
+        # v /= torch.norm(v)
+
+        # print("\n[Power Iteration] Starting...")
+        
+        for i in range(num_iters):
+            v_new = scatter_matrix @ v
+            v_new /= torch.norm(v_new)
+
+            diff = torch.norm(v_new - v)
+            # print(f"  Iter {i+1}: Change in eigenvector = {diff:.6f}")
+
+            if diff < tol:
+                # print("  Converged.")
+                break
+
+            v = v_new
+
+        eigenvalue = (v @ scatter_matrix @ v).item()
+        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
+        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
+
+        return v, eigenvalue
+
+    def _rayleigh_quotient_iteration(self, scatter_matrix, num_iters=50, tol=1e-6):
+        """
+        Rayleigh Quotient Iteration to find the dominant eigenvector and eigenvalue.
+        """
+        device = self.mean.device
+        v = torch.randn(scatter_matrix.shape[0], device=device)
+        v /= torch.norm(v)
+
+        # print("\n[Rayleigh Quotient Iteration] Starting...")
+
+        for i in range(num_iters):
+            v_new = scatter_matrix @ v
+            v_new /= torch.norm(v_new)  # Normalization (same as power iteration)
+
+            eigenvalue = (v_new @ scatter_matrix @ v_new).item()  # Rayleigh Quotient
+            
+            diff = torch.norm(v_new - v)
+            # print(f"  Iter {i+1}: Eigenvalue = {eigenvalue:.6f}, Change in eigenvector = {diff:.6f}")
+
+            if diff < tol:
+                # print("  Converged.")
+                break
+
+            v = v_new
+
+        # print(f"  Dominant eigenvalue found: {eigenvalue:.6f}")
+        # print(f"  Dominant eigenvector: {v.cpu().numpy()}\n")
+
+        return v, eigenvalue
+
+    def use_grad(self, requires_grad=True):
+        """
+        Enable or disable gradient tracking for all parameters in this module.
+        
+        :param requires_grad: Boolean indicating whether gradients should be tracked
+        :return: self (for method chaining)
+        """
+        for param in self.parameters():
+            param.requires_grad_(requires_grad)
+        return self
+
+    def set_mean(self, mean_tensor):
+        """Set new values for the mean parameter"""
+        self.mean.data.copy_(mean_tensor)
+        return self
+        
+    def set_eigenvectors(self, eigenvectors_tensor):
+        """Set new values for the eigenvectors parameter"""
+        self.eigenvectors.data.copy_(eigenvectors_tensor)
+        return self
+        
+    def set_eigenvalues(self, eigenvalues_tensor):
+        """Set new values for the eigenvalues parameter"""
+        self.eigenvalues.data.copy_(eigenvalues_tensor)
+        return self
+
+    def forward(self, num_samples):
+        """
+        Generate samples from the Gaussian distribution.
+        This is equivalent to the sample method but follows PyTorch convention.
+        
+        :param num_samples: Number of samples to generate.
+        :return: Tensor of shape (num_samples, d) containing generated samples.
+        """
+        raise "NotImplemented" 
+    
+    def sample(self, num_samples):
+        """
+        Generate samples from the Gaussian distribution using its principal components.
+        
+        :param num_samples: Number of samples to generate.
+        :return: Tensor of shape (num_samples, d) containing generated samples.
+        """
+        d = self.mean.shape[0]  # Dimensionality
+        
+        # Generate standard normal samples
+        z = torch.randn(num_samples, d, device=self.mean.device)
+        
+        # Scale by sqrt of eigenvalues (standard deviations along principal axes)
+        scaled_samples = z * torch.sqrt(self.eigenvalues).unsqueeze(0)
+        
+        # Transform into original space using eigenvectors
+        transformed_samples = scaled_samples @ self.eigenvectors.T
+        
+        # Shift by mean
+        samples = transformed_samples + self.mean
+        
+        return samples
+
+    def calculate_squared_mahalanobis_distance(self, data):
+        """
+        Calculate the squared Mahalanobis distance for a batch of samples based on this Gaussian component.
+
+        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
+        :return: Mahalanobis distance for the sample
+        """
+        # Step 1: Center the samples by subtracting the mean
+        centered_data = data - self.mean
+
+        # Step 2: Project the centered data onto the eigenvector space (principal component space)
+        projected_data = torch.matmul(centered_data, self.eigenvectors)  # (1D sample x eigenvectors matrix)
+
+        # Step 3: Compute the Mahalanobis distance squared (using the eigenvalues for scaling)
+        mahalanobis_sq = torch.sum((projected_data ** 2) / (self.eigenvalues.unsqueeze(0) + 1e-6))  # Adding epsilon for stability
+        
+        # Return the squared Mahalanobis distance
+        return mahalanobis_sq
+    
+    def calculate_mahalanobis_distance(self, data):
+        """
+        Calculate the Mahalanobis distance for a batch of samples based on this Gaussian component.
+
+        :param data: A batch of sample to calculate the Mahalanobis distance for (1D tensor of size [dimensionality])
+        :return: Mahalanobis distance for the sample
+        """
+        # Return the Mahalanobis distance (not squared)
+        return torch.sqrt(self.calculate_squared_mahalanobis_distance(data))
+    
+    def calculate_likelihood(self, data):
+        """
+        Calculate the unnormalized responsibilities (likelihoods) for each data point
+        belonging to this Gaussian component.
+
+        :param data: Tensor of shape (n_samples, dimensionality)
+        :return: Tensor of shape (n_samples, 1) containing unnormalized responsibilities
+        """
+        d = self.mean.shape[0]
+        device = self.mean.device
+        
+        # Compute Mahalanobis distance squared
+        mahalanobis_sq = self.calculate_squared_mahalanobis_distance(data)
+
+        # Compute log determinant of covariance (with stability term)
+        log_det = torch.log(self.eigenvalues + 1e-6).sum()
+
+        # Compute log likelihood
+        log_likelihood = -0.5 * (d * torch.log(2 * torch.tensor(torch.pi, device=device)) 
+                                + log_det 
+                                + mahalanobis_sq)
+
+        # Convert to likelihoods (unnormalized responsibilities)
+        likelihoods = torch.exp(log_likelihood).unsqueeze(1)
+
+        return likelihoods  # Should be normalized externally in GMM
 
 class ComponentGMM(nn.Module):
     """
